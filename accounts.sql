@@ -158,6 +158,8 @@ left join accounts parent
 	and (parent.is_deleted != true or parent.is_deleted is null)
 left join analytics.serviceability_v4
 	on analytics.data_accounts.location_zip_code = analytics.serviceability_v4.zip_code
+left join analytics.int_account_churn_risk
+    on analytics.data_accounts.account_external_id = analytics.int_account_churn_risk.account_external_id
 left join domains
 	on domains.id = analytics.data_accounts.account_id
 where 1=1
