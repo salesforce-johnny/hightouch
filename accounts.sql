@@ -138,6 +138,12 @@ select distinct
 	, analytics.serviceability_v4.overall_grade as Serviceability_Grade__c
 	, analytics.serviceability_v4.tractor_grade as Tractor_Trailers_Grade__c
 	, analytics.serviceability_v4.truck_grade as Trucks_Grade__c
+-- churn risk
+    , analytics.int_account_churn_risk.priority_score as Churn_Priority_Score__c
+    , analytics.int_account_churn_risk.REVENUE_LAST_90_DAYS as Revenue_Last_90_Days__c
+    , analytics.int_account_churn_risk.REVENUE_PRIOR_90_DAYS as Churn_Revenue_Prior_90_Day_Period__c
+    , analytics.int_account_churn_risk.PCT_CHANGE_LAST90_VS_PRIOR90 as Percent_Revenue_Change_Last_90_Prior_90__c
+    , analytics.int_account_churn_risk.DELTA_UNIQUE_USERS_LAST30_VS_PRIOR30 as Delta_Unique_Users_Last_30_v_Prior_30__c
 	, case 
 		when analytics.data_accounts.account_type = 'company' or parent.external_id is null then 'Company'
 		else 'Team Account' end as account_record_type
