@@ -144,7 +144,7 @@ select distinct
     , analytics.int_account_churn_risk.REVENUE_PRIOR_90_DAYS as Churn_Revenue_Prior_90_Day_Period__c
     , analytics.int_account_churn_risk.PCT_CHANGE_LAST90_VS_PRIOR90 as Percent_Revenue_Change_Last_90_Prior_90__c
     , analytics.int_account_churn_risk.DELTA_UNIQUE_USERS_LAST30_VS_PRIOR30 as Delta_Unique_Users_Last_30_v_Prior_30__c
-	, analytics.int_account_churn_risk.POTENTIAL_SUPPLY_ISSUE as Potential_Supply_Issue__c
+	, COALESCE(analytics.int_account_churn_risk.POTENTIAL_SUPPLY_ISSUE,FALSE) as Potential_Supply_Issue__c
 	, case 
 		when analytics.data_accounts.account_type = 'company' or parent.external_id is null then 'Company'
 		else 'Team Account' end as account_record_type
