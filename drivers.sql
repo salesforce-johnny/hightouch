@@ -1,21 +1,63 @@
 with
 	route_templates as (
-		select 
-			driver_id
-			, array_to_string((array_agg(external_id))[1:10], ';') as Route_Template_ID__c
-			, case 
-				when analytics.data_route_templates.external_id is not null 
-				and (analytics.data_route_templates.end_date is null or end_date <= now()::date) 
-				then true else false end as Active_Route_Driver__c 
-		from analytics.data_route_templates
-		group by 1,3
+		select distinct
+			analytics.mart_drivers.driver_external_id as driver_external_id
+			, analytics.data_carriers.external_id as carrier_id
+			, analytics.mart_route_templates.external_id as route_template_id__C
+			, fulfilled_on
+			, fulfilled_on >= current_date::date - interval '7 days' as active_route_driver__c
+		from analytics.mart_routes
+		left join analytics.mart_route_templates
+			on analytics.mart_routes.route_template_id = analytics.mart_route_templates.id
+		left join analytics.mart_drivers
+			on analytics.mart_routes.driver_id = analytics.mart_drivers.DRIVER_ID
+		left join analytics.data_carriers
+			on analytics.mart_routes.carrier_id = analytics.data_carriers.id
 	)
-	, route_instance_drivers as (
-		select 
-			driver_id
-		from route_instances
+	, active_route_drivers as (
+		SELECT distinct
+			driver_external_id
+			, route_template_id__c
+			, active_route_driver__c
+		from route_templates
+		where active_route_driver__c = true
+		qualify row_number() over (partition by driver_external_id order by fulfilled_on desc nulls last) = 1
 	)
-select distinct on (driver_external_id)
+	, all_route_drivers as (
+		select distinct
+			driver_external_id
+		from route_templates
+	)
+	, splits as (
+		select
+			t.driver_external_id
+			, listagg(distinct f.value::string, ';') as Driver_Accessories__c
+			, listagg(distinct g.value::string, ';') as Driver_Capabilities__c
+			, listagg(distinct h.value::string, ';') as Active_Violation_Types__c
+			, listagg(distinct i.value::string, ';') as Lifetime_Violation_types__c
+			, listagg(distinct j.value::string, ';') as Vehicle_Accessories__c
+			, listagg(distinct k.value::string, ';') as Preferred_Delivery_Methods__c
+			, listagg(distinct l.value::string, ';') as Upscale_Delivery_Methods__c
+		from analytics.data_drivers t
+			, lateral flatten(input => t.driver_accessory_names) f
+			, lateral flatten(input => t.driver_capability_names) g
+			, lateral flatten(input => t.active_violation_types) h
+			, lateral flatten(input => t.lifetime_violation_types) i
+			, lateral flatten(input => t.driver_vehicle_accessory_names) j
+			, lateral flatten(input => t.preferred_delivery_methods) k
+			, lateral flatten(input => t.upscale_delivery_methods) l
+		group by t.driver_external_id
+		order by t.driver_external_id
+	)
+	, accessories as (
+		select
+			driver_external_id
+			, f.value::string as accessory_name
+		from analytics.data_drivers t
+			, lateral flatten(input => t.driver_accessory_names) f
+		where f.value::string ilike '%(PPE)%'
+	)
+select distinct
 -- driver basics & ids
     analytics.data_drivers.driver_external_id as pk
 	, left(first_name, 40) as FirstName
@@ -23,38 +65,37 @@ select distinct on (driver_external_id)
 	, analytics.data_drivers.driver_external_id as Driver_External_ID__c
 	, analytics.data_drivers.carrier_external_id as Carrier_External_ID__c
 	, Route_Template_ID__c
-	, stripe_account_id as Stripe_Account_ID__c
+	-- , stripe_account_id as Stripe_Account_ID__c
 	, case 
 	    when phone_number ilike 'tel://%' 
-	         and regexp_replace(phone_number, 'tel://.+(?:\+1)?(\d{10})', '\1') is not null
-	         then '+1' || regexp_replace(phone_number, 'tel://.+(?:\+1)?(\d{10})', '\1')
-        when phone_number ~ '(?:\+1(?:[\s-]*)*)*(\(\d{3}\)|\d{3})(?:[\s.-])*(\d{3})[\s.-]*(\d{4})'
-        	then case 
-                    -- If the area code is in parentheses:
-                    when phone_number ~ '^\+?1?[\s-]*\(\d{3}\)'
-                      then regexp_replace(
-                             phone_number, 
-                             '^(?:\+1[\s-]*)?\((\d{3})\)[\s.-]*(\d{3})[\s.-]*(\d{4})$', 
-                             '+1\1\2\3'
-                           )
-                    -- Otherwise the area code is given as 3 digits without parentheses:
-                    else regexp_replace(
-                             phone_number, 
-                             '^(?:\+1[\s-]*)?(\d{3})[\s.-]*(\d{3})[\s.-]*(\d{4})$', 
-                             '+1\1\2\3'
-                           )
-                  end
-        when phone_number ilike 'tel%' then null
-        when phone_number ilike '%del%' then null
+	         and regexp_replace(phone_number, 'tel://.+(\\+1)?(\\d{10})', '\\2') is not null
+	         then '+1' || regexp_replace(phone_number, 'tel://.+(\\+1)?(\\d{10})', '\\2')
+		when regexp_like(phone_number, '(\\+1[\\s-]*)*(\\(\\d{3}\\)|\\d{3})([\\s.-]*)(\\d{3})([\\s.-]*)(\\d{4})')
+			then case 
+				when regexp_like(phone_number, '^\\+?1?[\\s-]*\\(\\d{3}\\)')
+				  then regexp_replace(
+						 phone_number, 
+						 '^(\\+1[\\s-]*)?\\((\\d{3})\\)[\\s.-]*(\\d{3})[\\s.-]*(\\d{4})$', 
+						 '+1\\2\\3\\4'
+					   )
+				else regexp_replace(
+						 phone_number, 
+						 '^(\\+1[\\s-]*)?(\\d{3})[\\s.-]*(\\d{3})[\\s.-]*(\\d{4})$', 
+						 '+1\\2\\3\\4'
+					   )
+				end
+	    when phone_number ilike 'tel%' then null
+	    when phone_number ilike '%del%' then null
 	    when phone_number ilike '--' then null
-	    when phone_number ilike '' then null
-	    when phone_number ~ '^\d{10}$' then '+1' || phone_number
-	    when phone_number ~ '^1\d{10}$' then '+' || phone_number
-	    when phone_number ~ '^\+1\d{10}$' then phone_number
-	    when phone_number ~ '^1\d{10}.*' then '+' || left(phone_number, 11)
-	    when phone_number ~ '^\d{10}.*' then '+1' || left(phone_number, 10)
-	    else phone_number end as Phone
- 	, analytics.data_drivers.email_address  as Email
+	    when phone_number = '' then null
+	    when regexp_like(phone_number, '^\\d{10}$') then '+1' || phone_number
+	    when regexp_like(phone_number, '^1\\d{10}$') then '+' || phone_number
+	    when regexp_like(phone_number, '^\\+1\\d{10}$') then phone_number
+	    when regexp_like(phone_number, '^1\\d{10}.*') then '+' || left(phone_number, 11)
+	    when regexp_like(phone_number, '^\\d{10}.*') then '+1' || left(phone_number, 10)
+	    else phone_number 
+	  end as Phone
+ 	, lower(trim(analytics.data_drivers.email_address)) as Email
 	--	status
 	, activity_level_status as Activity_Level_Status__c
 	, activity_level as Activity_Level__c
@@ -62,29 +103,41 @@ select distinct on (driver_external_id)
 	, analytics.data_drivers.status as Status__c
 	, has_active_violation as Has_Active_Violation__c
 	--	driver & carrier info
-	, to_char(analytics.data_drivers.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Created_At__c
 	, acquisition_source as Acquisition_Source__c
-	, to_char(carrier_approved_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Carrier_Approved_At__c
-	, to_char(carrier_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Carrier_Created_At__c
 	, carrier_permissions as Carrier_Permissions__c
 	, case when carrier_id is not null then true else false end as Is_Carrier__c
 	, driver_notification_preference as Driver_Notification_Preference__c
 	, driver_type as Driver_Type__c
-	, array_to_string(array(select distinct unnest(driver_accessory_names)),';') as Driver_Accessories__c
-	, array_to_string(array(select distinct unnest(driver_capability_names)),';') as Driver_Capabilities__c
-	, false as Is_Customer__c
 	, is_dsp as Is_DSP__c
 	, is_preferred_driver as Is_Preferred_Driver__c
-	, case when route_instance_drivers.driver_id is not null then true else false end as Is_Route_Driver__c
+	, case when all_route_drivers.driver_external_id is not null then true else false end as Is_Route_Driver__c
 --	checkr
 	, checkr_invitation_status as Checkr_Invitation_Status__c
-	, to_char(checkr_invitation_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Checkr_Invitation_Created_At__c
-	, to_char(checkr_invitation_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Checkr_Invitation_Completed_At__c
+	, to_varchar(convert_timezone('UTC', analytics.data_drivers.created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Created_At__c
+	, to_varchar(convert_timezone('UTC', carrier_approved_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Carrier_Approved_At__c
+	, to_varchar(convert_timezone('UTC', carrier_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Carrier_Created_At__c
+	, to_varchar(convert_timezone('UTC', checkr_invitation_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Checkr_Invitation_Created_At__c
+	, to_varchar(convert_timezone('UTC', checkr_invitation_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Checkr_Invitation_Completed_At__c
+	, to_varchar(convert_timezone('UTC', first_checkr_invitation_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as First_Checkr_Invitation_Created_At__c
+	, to_varchar(convert_timezone('UTC', first_checkr_invitation_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as First_Checkr_Invitation_Completed_At__c
+	, to_varchar(convert_timezone('UTC', first_banned_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as First_Banned_at__c
+	, to_varchar(convert_timezone('UTC', last_banned_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Banned_At__c
+	, to_varchar(convert_timezone('UTC', first_violation_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as First_Violation_Created_At__c
+	, to_varchar(convert_timezone('UTC', last_violation_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Violation_Created_At__c
+	, to_varchar(convert_timezone('UTC', address_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Address_Created_At__c
+	, to_varchar(convert_timezone('UTC', last_request_sent), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Request_Sent__c
+	, to_varchar(convert_timezone('UTC', last_request_accepted), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Request_Accepted__c
+	, to_varchar(convert_timezone('UTC', last_request_viewed), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Request_Viewed__c
+	, to_varchar(convert_timezone('UTC', first_delivery_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as First_Delivery_Completed_At__c
+	, to_varchar(convert_timezone('UTC', third_delivery_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Third_Delivery_Completed_At__c
+	, to_varchar(convert_timezone('UTC', fifth_delivery_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Fifth_Delivery_Completed_At__c
+	, to_varchar(convert_timezone('UTC', last_delivery_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Delivery_Completed_At__c
+	, to_varchar(convert_timezone('UTC', last_hotshot_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Hotshot_Completed_At__c
+	, to_varchar(convert_timezone('UTC', last_route_completed_at), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Route_Completed_At__c
+	, to_varchar(convert_timezone('UTC', last_delivery_assignment), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Last_Delivery_Assignment__c
 	, checkr_invitation_id as Checkr_Invitation_ID__c
 	, first_checkr_invitation_id as First_Checkr_Invitation_ID__c
 	, first_checkr_invitation_status as First_Checkr_Invitation_Status__c	
-	, to_char(first_checkr_invitation_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as First_Checkr_Invitation_Created_At__c
-	, to_char(first_checkr_invitation_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as First_Checkr_Invitation_Completed_At__c
 	, first_background_check_approval as First_Background_Check_Approval__c
 	, first_background_check_rejection as First_Background_Check_Rejection__c
 	, last_background_check_approval as Last_Background_Check_Approval__c
@@ -93,78 +146,72 @@ select distinct on (driver_external_id)
 	, checkr_candidate_id as Checkr_Candidate_ID__c
 --	bans
 	, total_bans as Total_Bans__c
-	, to_char(first_banned_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as First_Banned_at__c
-	, to_char(last_banned_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Banned_At__c
 	, user_who_banned_driver_first as User_Who_Banned_Driver_First__c
 	, user_who_banned_driver_last as User_Who_Banned_Driver_Last__c
 	, first_ban_reason as First_Ban_Reason__c
 	, last_ban_reason as Last_Ban_Reason__c
 	, is_banned as Is_Banned__c
 --	violations
-	, to_char(first_violation_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as First_Violation_Created_At__c
-	, to_char(last_violation_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Violation_Created_At__c
 	, active_violation_count as Active_Violation_Count__c
 	, lifetime_violation_count as Lifetime_Violation_Count__c
-	, array_to_string(array(select distinct unnest(active_violation_types)),';') as Active_Violation_Types__c
-	, array_to_string(array(select distinct unnest(lifetime_violation_types)),';') as Lifetime_Violation_types__c
 	, most_common_violation as Most_Common_Violation__c
 --	geolocation
-	, to_char(address_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Address_Created_At__c
 	, address_line_1 as Address_Line_1__c
 	, address_line_2 as Address_Line_2__c
 	, left(city, 40) as City__c
 	, case 
-		when lower(trim(state)) = '%alabama%' then 'AL'
-		when lower(trim(state)) = '%alaska%' then 'AK'
-		when lower(trim(state)) = '%arizona%' then 'AZ'
-		when lower(trim(state)) = '%arkansas%' then 'AR'
-		when lower(trim(state)) = '%california%' then 'CA'
-		when lower(trim(state)) = '%colorado%' then 'CO'
-		when lower(trim(state)) = '%connecticut%' then 'CT'
-		when lower(trim(state)) = '%delaware%' then 'DE'
-		when lower(trim(state)) = '%district%of%columbia%' then 'DC'
-		when lower(trim(state)) = '%florida%' then 'FL'
-		when lower(trim(state)) = '%georgia%' then 'GA'
-		when lower(trim(state)) = '%hawaii%' then 'HI'
-		when lower(trim(state)) = '%idaho%' then 'ID'
-		when lower(trim(state)) = '%illinois%' then 'IL'
-		when lower(trim(state)) = '%indiana%' then 'IN'
-		when lower(trim(state)) = '%iowa%' then 'IA'
-		when lower(trim(state)) = '%kansas%' then 'KS'
-		when lower(trim(state)) = '%kentucky%' then 'KY'
-		when lower(trim(state)) = '%louisiana%' then 'LA'
-		when lower(trim(state)) = '%maine%' then 'ME'
-		when lower(trim(state)) = '%maryland%' then 'MD'
-		when lower(trim(state)) = '%massachusetts%' then 'MA'
-		when lower(trim(state)) = '%michigan%' then 'MI'
-		when lower(trim(state)) = '%minnesota%' then 'MN'
-		when lower(trim(state)) = '%mississippi%' then 'MS'
-		when lower(trim(state)) = '%missouri%' then 'MO'
-		when lower(trim(state)) = '%montana%' then 'MT'
-		when lower(trim(state)) = '%nebraska%' then 'NE'
-		when lower(trim(state)) = '%nevada%' then 'NV'
-		when lower(trim(state)) = '%new%hampshire%' then 'NH'
-		when lower(trim(state)) = '%new%jersey%' then 'NJ'
-		when lower(trim(state)) = '%new%mexico%' then 'NM'
-		when lower(trim(state)) = '%new%york%' then 'NY'
-		when lower(trim(state)) = '%north%carolina%' then 'NC'
-		when lower(trim(state)) = '%north%dakota%' then 'ND'
-		when lower(trim(state)) = '%ohio%' then 'OH'
-		when lower(trim(state)) = '%oklahoma%' then 'OK'
-		when lower(trim(state)) = '%oregon%' then 'OR'
-		when lower(trim(state)) = '%pennsylvania%' then 'PA'
-		when lower(trim(state)) = '%rhode%island%' then 'RI'
-		when lower(trim(state)) = '%south%carolina%' then 'SC'
-		when lower(trim(state)) = '%south%dakota%' then 'SD'
-		when lower(trim(state)) = '%tennessee%' then 'TN'
-		when lower(trim(state)) = '%texas%' then 'TX'
-		when lower(trim(state)) = '%utah%' then 'UT'
-		when lower(trim(state)) = '%vermont%' then 'VT'
-		when lower(trim(state)) = '%virginia%' then 'VA'
-		when lower(trim(state)) = '%washington%' then 'WA'
-		when lower(trim(state)) = '%west%virginia%' then 'WV'
-		when lower(trim(state)) = '%wisconsin%' then 'WI'
-		when lower(trim(state)) = '%wyoming%' then 'WY'
+		when lower(trim(state)) like '%alabama%' then 'AL'
+		when lower(trim(state)) like '%alaska%' then 'AK'
+		when lower(trim(state)) like '%arizona%' then 'AZ'
+		when lower(trim(state)) like '%arkansas%' then 'AR'
+		when lower(trim(state)) like '%california%' then 'CA'
+		when lower(trim(state)) like '%colorado%' then 'CO'
+		when lower(trim(state)) like '%connecticut%' then 'CT'
+		when lower(trim(state)) like '%delaware%' then 'DE'
+		when lower(trim(state)) like '%district%of%columbia%' then 'DC'
+		when lower(trim(state)) like '%florida%' then 'FL'
+		when lower(trim(state)) like '%georgia%' then 'GA'
+		when lower(trim(state)) like '%hawaii%' then 'HI'
+		when lower(trim(state)) like '%idaho%' then 'ID'
+		when lower(trim(state)) like '%illinois%' then 'IL'
+		when lower(trim(state)) like '%indiana%' then 'IN'
+		when lower(trim(state)) like '%iowa%' then 'IA'
+		when lower(trim(state)) like '%kansas%' then 'KS'
+		when lower(trim(state)) like '%kentucky%' then 'KY'
+		when lower(trim(state)) like '%louisiana%' then 'LA'
+		when lower(trim(state)) like '%maine%' then 'ME'
+		when lower(trim(state)) like '%maryland%' then 'MD'
+		when lower(trim(state)) like '%massachusetts%' then 'MA'
+		when lower(trim(state)) like '%michigan%' then 'MI'
+		when lower(trim(state)) like '%minnesota%' then 'MN'
+		when lower(trim(state)) like '%mississippi%' then 'MS'
+		when lower(trim(state)) like '%missouri%' then 'MO'
+		when lower(trim(state)) like '%montana%' then 'MT'
+		when lower(trim(state)) like '%nebraska%' then 'NE'
+		when lower(trim(state)) like '%nevada%' then 'NV'
+		when lower(trim(state)) like '%new%hampshire%' then 'NH'
+		when lower(trim(state)) like '%new%jersey%' then 'NJ'
+		when lower(trim(state)) like '%new%mexico%' then 'NM'
+		when lower(trim(state)) like '%new%york%' then 'NY'
+		when lower(trim(state)) like '%north%carolina%' then 'NC'
+		when lower(trim(state)) like '%north%dakota%' then 'ND'
+		when lower(trim(state)) like '%ohio%' then 'OH'
+		when lower(trim(state)) like '%oklahoma%' then 'OK'
+		when lower(trim(state)) like '%oregon%' then 'OR'
+		when lower(trim(state)) like '%pennsylvania%' then 'PA'
+		when lower(trim(state)) like '%rhode%island%' then 'RI'
+		when lower(trim(state)) like '%south%carolina%' then 'SC'
+		when lower(trim(state)) like '%south%dakota%' then 'SD'
+		when lower(trim(state)) like '%tennessee%' then 'TN'
+		when lower(trim(state)) like '%texas%' then 'TX'
+		when lower(trim(state)) like '%utah%' then 'UT'
+		when lower(trim(state)) like '%vermont%' then 'VT'
+		when lower(trim(state)) like '%virginia%' then 'VA'
+		when lower(trim(state)) like '%washington%' then 'WA'
+		when lower(trim(state)) like '%west%virginia%' then 'WV'
+		when lower(trim(state)) like '%wisconsin%' then 'WI'
+		when lower(trim(state)) like '%wyoming%' then 'WY'
+		when upper(trim(state)) in ('AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC') then upper(trim(state))
 		else null end as State__c
 	, analytics.data_drivers.cbsa_name as CBSA__c
 	, zip_code as Zip_Code__c
@@ -175,16 +222,6 @@ select distinct on (driver_external_id)
 	, zip_code_latitude as Zip_Code_Latitude__c
 	, zip_code_longitude as Zip_Code_Longitude__c
 --	delivery activity
-	, to_char(last_request_sent at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Request_Sent__c
-	, to_char(last_request_accepted at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Request_Accepted__c
-	, to_char(last_request_viewed at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Request_Viewed__c
-	, to_char(first_delivery_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as First_Delivery_Completed_At__c
-	, to_char(third_delivery_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Third_Delivery_Completed_At__c
-	, to_char(fifth_delivery_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Fifth_Delivery_Completed_At__c
-	, to_char(last_delivery_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Delivery_Completed_At__c
-	, to_char(last_hotshot_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Hotshot_Completed_At__c
-	, to_char(last_route_completed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Route_Completed_At__c
-	, to_char(last_delivery_assignment at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as Last_Delivery_Assignment__c
 	, total_completed_deliveries as Total_Completed_Deliveries__c
 	, total_hotshots_deliveries_completed as Total_Hotshot_Deliveries_Completed__c
 	, total_route_deliveries_completed as Total_Route_Deliveries_Completed__c
@@ -209,23 +246,34 @@ select distinct on (driver_external_id)
 	, vehicle_teoalida_id as Vehicle_Teoalida_ID__c
 	, vehicle_year as Vehicle_Year__c
 	, vehicle_class as Vehicle_Class__c
-	, array_to_string(array(select distinct unnest(driver_vehicle_accessory_names)),';') as Vehicle_Accessories__c
 	, vehicle_make as Vehicle_Make__c
 	, vehicle_model as Vehicle_Model__c
 	, vehicle_trim as Vehicle_Trim__c
-	, array_to_string(array(select distinct unnest(preferred_delivery_methods)),';') as Preferred_Delivery_Methods__c
-	, array_to_string(array(select distinct unnest(upscale_delivery_methods)),';') as Upscale_Delivery_Methods__c
 --	boolean qualifiers
 	, has_app_installed as Has_App_Installed__c
-	, has_bank_account_on_file as Has_Bank_Account_on_File__c
-	, has_card_on_file as Has_Card_on_File__c
+	-- , has_bank_account_on_file as Has_Bank_Account_on_File__c
+	-- , has_card_on_file as Has_Card_on_File__c
 	, has_profile_photo as Has_Profile_Photo__c
 	, went_through_carrier_flow as Went_Through_Carrier_Flow__c
 	, 'Driver' as contact_record_type
+	, splits.Driver_Accessories__c
+	, splits.Driver_Capabilities__c
+	, splits.Active_Violation_Types__c
+	, splits.Lifetime_Violation_types__c
+	, splits.Vehicle_Accessories__c
+	, splits.Preferred_Delivery_Methods__c
+	, splits.Upscale_Delivery_Methods__c
+	, case
+		when array_contains('ppe-certified'::variant, analytics.data_drivers.driver_tags) then 'Certified'
+		when (not array_contains('ppe-certified'::variant, analytics.data_drivers.driver_tags) or analytics.data_drivers.driver_tags is null) and analytics.data_drivers.driver_external_id in (select driver_external_id from accessories) then 'Unverified'
+		else 'None' end as PPE_certification
 from analytics.data_drivers
-left join route_templates using (driver_id)
-left join route_instance_drivers
-	on analytics.data_drivers.driver_id = route_instance_drivers.driver_id
+left join active_route_drivers
+	on analytics.data_drivers.driver_external_id = active_route_drivers.driver_external_id
+left join all_route_drivers
+	on analytics.data_drivers.driver_external_id = all_route_drivers.driver_external_id
+left join splits
+	on analytics.data_drivers.driver_external_id = splits.driver_external_id
 where 1=1
 	and first_name is not null
 	and last_name is not null
@@ -234,4 +282,5 @@ where 1=1
 	-- invalid emails
 	and email_address not in ('Jameseburke99@gmail', 'darion92moody@.gmail.com', '.davidjohnwetmore@gmail.com', '.mhp900@aol.com', '@jnyemelah@gmail.com', '@plinioclamper@gmail.com', '1345@tux@gmail.com', '5257 rl63@gmail.com', '6236941448', 'acj63002@gmail@com', 'ahmadalexander@31@gmail.com', 'aissiousouheib@gmail..com', 'ajaanisah1@gmail.comsah1@gmail.com', 'akashdeepscolia@786@gmail.com', 'alban@blackgauntlet60@gmail.com', 'alcosey55@gmail..com', 'alfredo.vazquez@13@yahoo.com', 'alyssa kennedy59@gmail.com', 'amccloud74@yahoo@com', 'américa.61@hotmail.com', 'andrés.beltran@aol.com', 'ángel-pérez-123@hotmail.con', 'ave@462@aol.com', 'azulito68@gmail@com', 'b jordan2809@yahoo.com', 'barry polk123@gmail.com', 'barryturner2019 barryturner2019@gmail.com', 'bedat@85@yahoo.com', 'bhbasnet33@gmail..com', 'blacknwhitefamous@yahoo', 'bryce@yrd15@gmail.com', 'buds@960@yahoo.com', 'cal roland1@aol.com', 'calhounservices 18@yahoo.com', 'cedricksamuelsr@gmail.com@gmail.com', 'chester jackson87@gmail.com', 'chris tiamzon8273@gmail.com', 'chris12422@.gmail.com', 'chynalynaecanady@gmail@com', 'cjackson9476cjackson9476@gmail.com@gmail.com', 'climafan33@.gmail.com', 'codiet2018@gmail@com', 'comeaux chasity@gmail.com', 'crawford_ brothers@yahoo.com', 'çreed101514@gmail.com', 'crucial 264@gmail.com', 'damonjaimitchellsr@yahoo@com', 'dan theman.kundell@gmail.com', 'daniel clausen.usa@gmail.com', 'danielbloodline 24@gmail.com', 'danielbloodline 24@gmail.com', 'danielhyacinthe 123@gmail.com', 'daniellemaman1@gmail.com@gmail.com', 'david.k.rolon@gmail..com', 'dbolte 1214@gmail.com', 'dcher9802@gmail.com.', 'dee.fig602@gmail', 'deebrown 1224@gmail.com', 'dlrlogistics@2@gmail.com', 'dontaebrooks .db.db@gmail.com', 'dpresley8822@gmail.com to', 'dukeboyant255@gmail.com@gmail.com', 'e t.diaz329@gmail.com', 'eduardolbck@gmail.com garciavictor468@yahoo.com', 'eıizaıde02r2@gmail.com', 'entreprenew22@gmail@com', 'envyme .sb@gmail.com', 'ericvan229@gmail@com', 'evr101287@.icloud.com', 'familiatrujillo1993@gmail@com', 'fernandosalas705@gmailcom', 'flip.sam.8382@gmail.com@gmail.com', 'fowler.outwork@gmail@com', 'fox@kaleb@aol.com', 'funmiadesany53@gmail.com@gmail.com', 'ga mcmichael@gmail.com', 'gabrielmu20032003@gmail@com', 'garlandallen00@com', 'gary hambers@hotmail.com', 'george craig173624@gmail.com', 'gerald@gibbons112@yahoo.com', 'gordon brandow5@gmail.com', 'gugutrevino@hotmail@com', 'hamzapico04@gmail@com', 'heàtherstrommen@gmail.com', 'helım1976@gmail.com', 'heywesss@icloud@com', 'hhusen44@yahoo.com hhusen44@yahoo.com', 'hmarc 121480@gmail.com', 'hochy.gratereaux .ortega@gmail.com', 'hvn21934@gmail.', 'ihereck@gmail@com', 'imorales1935@gmail@com', 'iñanavelazquez04@gmail.com', 'ivalissa23@gmzy', 'iván.moreno100990@gmail.com', 'ivanpolanco@026@gmail.com', 'j. loretto14@gmail.com', 'jadenleighb123@gmail.com@gmail.com', 'jairosolares74@.gmail.com', 'Jameseburke99@gmail', 'jarredbowie14@gmail.comjarredbowie14@gmail.com', 'jay.opoku@yahoo@com', 'jbowers215@icloud@com', 'jdizzy2]]3@icloud.com', 'jeremeinw@.gmail.com', 'JessUrban2021', 'jguadarrama1819@yahoo.co.', 'jjermand n8@gmail.com', 'ĵkayla305@gmail.com', 'jl transportation.usa@gmail.com', 'joe.2326@yahoo.co.', 'jonesandbrittany@1118@gmail.com', 'jordydelgadofifa@fifa@gmail.com', 'josé.ortiz.newworld@gmail.com', 'joshuahinson82@gmail@com', 'jrr@gmail@gmail.com', 'jtjonathan@091@gmail.com', 'justin.meeker 1@gmail.com', 'jvredblvck@gmail.com@gmail.com', 'k b_business709@yahoo.com', 'k citocordova@gmail.com', 'kalanda.booker 4cdlmail@gmail.com', 'keddricklabady@gmail@com', 'ketoyadobbins@gmail@com', 'kevinfarris174@gmail@com', 'kevinfarris174@gmail@com', 'kh@aliljm98@gmail.com', 'kobef477@gmail@com', 'kristonchristopher@gmail@gmail.com', 'kydtzsen@yahoo@com', 'kytiarajackson@yahoo@com', 'l.dean1307@gmail@com', 'lanna townley19@gmail.com', 'laquishalee989@gmail..com', 'lashea.baker@.gmail.com', 'lbrb66@66@yahoo.com', 'leon .stone@me.com', 'leonard transport@yahoo.com', 'll llmarkpaynell@gmail.com', 'lramos97877@icloud@icloud.com', 'makengson 119@yahoo.fr', 'maliquewebster64@gmail@com', 'malvinnunez14@gmail@com', 'mannyboy@1@yahoo.com', 'mannyboy@1@yahoo.com', 'markmanicad0328@icloud@com', 'martinez fred51@gmail.com', 'martínezmercedes120@yahoo.com', 'Matt.Maxcy@ gmail.com', 'mconeyjr@omnitransllc.netmconeyjr@omnitransllc.net', 'michael kocak 42@gmail.com', 'michaelyeboah227@gmail.com@gmail.com', 'michelaraluce 57@gmail.com', 'miguelangelolaguiver96@gmail.com@gmail.com', 'miguelmoralesss2021@gmail@com', 'mike samuel 66@gmail.com', 'misslovely364@gmail@com', 'mjmason0[12@icloud.com', 'mmoore.workflow@gmail@com', 'mrsedchase@gmail@com', 'msfgadson@gmail@com', 'nazrul islam228+curri@gmail.com', 'nca@13@uakron.edu', 'norgem.perijatours@gmail.comjhhh j jgtht', 'null@null', 'nwc1107@gmail.com@gmail.com', 'oacounts@chingarande@gmail.com', 'olando@wisetek@gmail.com', 'omar_banales@yahoo@com', 'oneoffcustombillet@billet@yahoo.com', 'organdonor 54@gmail.com', 'p_ gilliam@yahoo.com', 'pablo@empresaswansonllc@gmail.com', 'pamela k doyle@gmail.com', 'parksm@91@yahoo.com', 'patríciasenna@protonmail.com', 'pauld transportation@gmail.com', 'peter.@1388@gmail.com', 'phonz1313@gmail@com', 'pickleroy@yahoo.co.', 'picnicparties@oh@gmail.com', 'piper t19731415@aol.com', 'plan4u services@gmail.com', 'princefrankline@21@gmail.com', 'pullenteejay@yahoo@com', 'quantae.davis@icloud@com', 'queonda777@live.com hi', 'raúl.lumbi@yahoo.com', 'ray.wilson@pandtlinc@com', 'razi.lawrence@yahoo@com', 'renemolina21@.gmail.com', 'rivera.pedro82@yahoo@com', 'rmarshall@blytheville@schools.net', 'robert 20k@yahoo.com', 'robert44 bunker@gmail.com', 'robriley43@yahoo.com@yahoo.com', 'rockcity1000@gmail@com', 'rocthedoc420@yahoo..com', 'rtblandscaping@gmail@gmail.com', 'ruthmateo 1774@gmail.com', 's davidbenedictla@gmail.com', 's m.fyne7@gmail.com', 's@dipina@me.com', 'sam cornett710@gmail.com', 'sammysalman1990@gmail.com u', 'samoh2336@gmail@com', 'samuelserrab032629@gmail@com', 'scotte.eric@72@outlook.com', 'sean@hitrefreshcom', 'seegmooregmail@com', 'seegmooregmail@com', 'Sethcantrll19&gmail.com', 'shaw_tiffanyn@yahoo@com', 'sheila hunter.az@icloud.com', 'shinikataylor@yahoo@com', 'simbasir@gmail@com', 'sirrichard’sllc2023@gmail.com', 'soccerchepe@yahoo..com', 'southernpearl100@icloud@com', 'stelhanwatts@02@yahoo.com', 'stelizyco@gmail..com', 'stephanied518@gmail@gmail.com', 'stowers james 772@gmail.com', 'Stumpnocker40@gmailcom', 'stunna@1@icloud.com', 'sue_chambers 1023@yahoo.com', 'sweetjsz@yahoo@com', 't. dan.kyle@gmail.com', 'tàm_brooks5888@gmail.com', 'tbozeman44@icloud@com', 'telskoe60:@gmail', 'telskoe60:@gmail', 'teresa.arteaga@1111@gmail.com', 'tesfalem mengustu@gmail.com', 'thedorsecodeshow@gmail@com', 'trapperfisbeck@com', 'traylon919@gmail@com', 'trucogm@gmail', 'tsmith1575@gmail@com', 'tylanbrinson25@gmail@com', 'tynosown1977@yahoo@com', 'v81722@gmail.com@gmail.com', 'vanishia30@gmail@com', 'venittoreji@icloud@gmail.com', 'victoria .lazos@yahoo.com', 'wevestinc@gmail@com', 'wildfricke78@gmail.com@gmail.com', 'wildfricke78@gmail.com@gmail.com', 'wiseguylogisticsllc@.gmail.com', 'workishettetime9@gmail.com@gmail.com', 'wrong ##', 'yanniel valier quian@gmail.com', 'yanniel valier quian@gmail.com', 'Yes', 'yngjrañer85@gmail.com', 'yolandag 414@yahoo.com', 'ysleta13@com', 'zayterrelll@gmail@com', 'zuleikawright49@gmail@com')
 	and phone_number not like '%del%'
-order by driver_external_id
+qualify row_number() over (partition by analytics.data_drivers.driver_external_id order by last_request_viewed desc nulls last) = 1
+order by analytics.data_drivers.driver_external_id
