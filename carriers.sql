@@ -1,3 +1,97 @@
+WITH
+
+all_carriers AS (
+  SELECT carrier_external_id, MAX(carrier_name) AS carrier_name
+  FROM CURRI.ANALYTICS.BT_DELIVERIES
+  WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
+    AND carrier_external_id IS NOT NULL
+    AND delivery_type NOT IN ('route', 'cms')
+  GROUP BY carrier_external_id
+
+  UNION
+
+  SELECT carrier_external_id, MAX(carrier_name) AS carrier_name
+  FROM CURRI.ANALYTICS.BT_VIOLATIONS
+  WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
+    AND carrier_external_id IS NOT NULL
+    AND delivery_type NOT IN ('route', 'cms')
+  GROUP BY carrier_external_id
+),
+
+carrier_completions AS (
+  SELECT
+    c.carrier_external_id,
+    COUNT(DISTINCT c.driver_external_id) AS driver_count,
+    COUNT(*) AS completed_deliveries,
+    COUNT(CASE WHEN av.delivery_external_id IS NULL THEN 1 END) AS accurate_deliveries
+  FROM CURRI.ANALYTICS.BT_DELIVERIES c
+  LEFT JOIN (
+    SELECT DISTINCT delivery_external_id
+    FROM CURRI.ANALYTICS.BT_VIOLATIONS
+    WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
+      AND delivery_type NOT IN ('route', 'cms')
+      AND violation_type_code IN (
+        'did_not_follow_delivery_instructions',
+        'wrong_vehicle',
+        'confirmed_wrong_vehicle',
+        'wrong_accessories',
+        'did_not_deliver_all_items'
+      )
+  ) av ON c.delivery_external_id = av.delivery_external_id
+  WHERE c.created_at >= DATEADD(day, -30, CURRENT_DATE)
+    AND c.is_completed_delivery = true
+    AND c.carrier_external_id IS NOT NULL
+    AND c.delivery_type NOT IN ('route', 'cms')
+  GROUP BY c.carrier_external_id
+),
+
+carrier_ratings AS (
+  SELECT
+    carrier_external_id,
+    AVG(customer_rating)                                         AS avg_customer_rating,
+    COUNT(CASE WHEN customer_rating IS NOT NULL THEN 1 END)     AS rated_deliveries
+  FROM CURRI.ANALYTICS.BT_DELIVERIES
+  WHERE is_completed_delivery = true
+    AND carrier_external_id IS NOT NULL
+    AND delivery_type NOT IN ('route', 'cms')
+  GROUP BY carrier_external_id
+),
+
+carrier_completion_viols AS (
+  SELECT carrier_external_id, COUNT(*) AS completion_violation_count
+  FROM CURRI.ANALYTICS.BT_VIOLATIONS
+  WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
+    AND violation_type_code IN (
+      'self_unassignment',
+      'scheduled_delivery_failure',
+      'did_not_complete_multistop_delivery'
+    )
+    AND carrier_external_id IS NOT NULL
+    AND delivery_type NOT IN ('route', 'cms')
+  GROUP BY carrier_external_id
+),
+
+carrier_eta AS (
+  SELECT
+    d.carrier_external_id,
+    COUNT(*) AS eta_delivery_count,
+    ROUND(
+      COUNT(CASE WHEN e.seconds_to_origin_delta / 60.0 BETWEEN -30 AND 27 THEN 1 END)
+      / NULLIF(COUNT(*), 0) * 100, 2
+    ) AS pickup_ontime_pct,
+    ROUND(
+      COUNT(CASE WHEN e.seconds_to_destination_delta / 60.0 BETWEEN -30 AND 12 THEN 1 END)
+      / NULLIF(COUNT(*), 0) * 100, 2
+    ) AS dropoff_ontime_pct
+  FROM CURRI.ANALYTICS.DELIVERY_DRIVER_ETAS_VS_ATAS e
+  JOIN CURRI.ANALYTICS.BT_DELIVERIES d ON e.delivery_id = d.delivery_id
+  WHERE d.created_at >= DATEADD(day, -30, CURRENT_DATE)
+    AND d.is_completed_delivery = true
+    AND d.carrier_external_id IS NOT NULL
+    AND d.delivery_type NOT IN ('route', 'cms')
+  GROUP BY d.carrier_external_id
+)
+
 select 
 --	account basics
 	analytics.data_carriers.external_id as pk
@@ -153,11 +247,42 @@ select
 	, analytics.data_carriers.occupational_accident_coverage as Occupational_Accident_Coverage__c
 	, analytics.data_carriers.workers_compensation_coverage as Workers_Compensation_Coverage__c
 	, analytics.data_carriers.stripe_payouts_enabled as Stripe_Payouts_Enabled__c
+    --scorecard
+    , COALESCE(carrier_completions.driver_count, 0) AS scorecard_driver_count__c
+    , COALESCE(carrier_completions.completed_deliveries, 0) AS scorecard_completed_deliveries__c
+    , COALESCE(carrier_completion_viols.completion_violation_count, 0)  AS scorecard_completion_violations__c
+    , ROUND(
+        COALESCE(carrier_completions.completed_deliveries, 0)
+        / NULLIF(COALESCE(carrier_completions.completed_deliveries, 0) + COALESCE(carrier_completion_viols.completion_violation_count, 0), 0)
+        * 100, 2
+      ) AS scorecard_completion_rate__c
+    , COALESCE(carrier_completions.accurate_deliveries, 0) AS scorecard_accurate_deliveries__c
+    , ROUND(
+        COALESCE(carrier_completions.accurate_deliveries, 0)
+        / NULLIF(COALESCE(carrier_completions.completed_deliveries, 0), 0)
+        * 100, 2
+      ) AS scorecard_delivery_accuracy__c
+    , CASE WHEN COALESCE(carrier_ratings.rated_deliveries, 0) > 0
+        THEN ROUND(carrier_ratings.avg_customer_rating, 2) END AS scorecard_avg_customer_rating__c
+    , COALESCE(carrier_ratings.rated_deliveries, 0) AS scorecard_rated_deliveries__c
+    , carrier_eta.eta_delivery_count AS scorecard_eta_delivery_count__c
+    , carrier_eta.pickup_ontime_pct AS scorecard_pickup_ontime_percent__c
+    , carrier_eta.dropoff_ontime_pct AS scorecard_dropoff_ontime_percent__c
 from analytics.data_carriers
 left join analytics.data_drivers	
 	on analytics.data_carriers.email_address = analytics.data_drivers.email_address
 	and analytics.data_carriers.external_id = analytics.data_drivers.carrier_external_id
 	and analytics.data_drivers.carrier_permissions = 'owner'
+left join all_carriers
+    on analytics.data_carriers.external_id = all_carriers.carrier_external_id
+left join carrier_completions
+    on analytics.data_carriers.external_id = carrier_completions.carrier_external_id
+left join carrier_ratings
+    on analytics.data_carriers.external_id = carrier_ratings.carrier_external_id
+left join carrier_completion_viols
+    on analytics.data_carriers.external_id = carrier_completion_viols.carrier_external_id
+left join carrier_eta
+    on analytics.data_carriers.external_id = carrier_eta.carrier_external_id
 where 1=1
   and name is not null
   and name <> ''
