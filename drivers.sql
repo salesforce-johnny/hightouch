@@ -361,13 +361,13 @@ select distinct
 	, CASE WHEN ROUND(
     	driver_completions.completed_deliveries
     	/ NULLIF(driver_completions.completed_deliveries + COALESCE(driver_completion_viols.completion_violation_count, 0), 0)
-    	, 4) < 80  THEN 'At Risk' ELSE NULL END  AS scorecard_risk_completion__c
+    	, 4) < 0.80  THEN 'At Risk' ELSE NULL END  AS scorecard_risk_completion__c
 	, CASE WHEN ROUND(
-    	driver_completions.accurate_deliveries / NULLIF(driver_completions.completed_deliveries, 0) , 4) < 95  THEN 'At Risk' ELSE NULL END 
+    	driver_completions.accurate_deliveries / NULLIF(driver_completions.completed_deliveries, 0) , 4) < 0.95  THEN 'At Risk' ELSE NULL END 
 		AS scorecard_risk_accuracy__c
-	, CASE WHEN driver_eta.pickup_ontime_pct  < 30
+	, CASE WHEN driver_eta.pickup_ontime_pct  < 0.30
     	THEN 'At Risk' ELSE NULL END  AS scorecard_risk_pickup_ontime__c
-	, CASE WHEN driver_eta.dropoff_ontime_pct < 30
+	, CASE WHEN driver_eta.dropoff_ontime_pct < 0.30
     	THEN 'At Risk' ELSE NULL END  AS scorecard_risk_dropoff_ontime__c
 --	boolean qualifiers
 	, has_app_installed as Has_App_Installed__c
