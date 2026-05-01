@@ -133,11 +133,11 @@ with
 			COUNT(*) AS eta_delivery_count,
 			ROUND(
 			COUNT(CASE WHEN e.seconds_to_origin_delta / 60.0 BETWEEN -30 AND 27 THEN 1 END)
-			/ NULLIF(COUNT(*), 0) * 100, 2
+			/ NULLIF(COUNT(*), 0), 4
 			) AS pickup_ontime_pct,
 			ROUND(
 			COUNT(CASE WHEN e.seconds_to_destination_delta / 60.0 BETWEEN -30 AND 12 THEN 1 END)
-			/ NULLIF(COUNT(*), 0) * 100, 2
+			/ NULLIF(COUNT(*), 0), 4
 			) AS dropoff_ontime_pct
 		FROM CURRI.ANALYTICS.DELIVERY_DRIVER_ETAS_VS_ATAS e
 		JOIN CURRI.ANALYTICS.BT_DELIVERIES d ON e.delivery_id = d.delivery_id
@@ -345,19 +345,30 @@ select distinct
 	, ROUND(
 		COALESCE(driver_completions.completed_deliveries, 0)
 		/ NULLIF(COALESCE(driver_completions.completed_deliveries, 0) + COALESCE(driver_completion_viols.completion_violation_count, 0), 0)
-		* 100, 2
+		, 4
 	) AS scorecard_completion_rate__c
 	, COALESCE(driver_completions.accurate_deliveries, 0) AS scorecard_accurate_deliveries__c
 	, ROUND(
 		COALESCE(driver_completions.accurate_deliveries, 0)
 		/ NULLIF(COALESCE(driver_completions.completed_deliveries, 0), 0)
-		* 100, 2
+		, 4
 	) AS scorecard_delivery_accuracy__c
 	, CASE WHEN COALESCE(driver_ratings.rated_deliveries, 0) > 0 THEN ROUND(driver_ratings.avg_customer_rating, 2) END AS scorecard_average_customer_rating__c
 	, COALESCE(driver_ratings.rated_deliveries, 0) AS scorecard_rated_deliveries__c
 	, driver_eta.eta_delivery_count AS scorecard_eta_delivery_count__c
 	, driver_eta.pickup_ontime_pct AS scorecard_pickup_ontime_percent__c
 	, driver_eta.dropoff_ontime_pct AS scorecard_dropoff_ontime_percent__c
+	, CASE WHEN ROUND(
+    	driver_completions.completed_deliveries
+    	/ NULLIF(driver_completions.completed_deliveries + COALESCE(driver_completion_viols.completion_violation_count, 0), 0)
+    	, 4) < 80  THEN 'At Risk' ELSE NULL END  AS scorecard_risk_completion__c
+	, CASE WHEN ROUND(
+    	driver_completions.accurate_deliveries / NULLIF(driver_completions.completed_deliveries, 0) , 4) < 95  THEN 'At Risk' ELSE NULL END 
+		AS scorecard_risk_accuracy__c
+	, CASE WHEN driver_eta.pickup_ontime_pct  < 30
+    	THEN 'At Risk' ELSE NULL END  AS scorecard_risk_pickup_ontime__c
+	, CASE WHEN driver_eta.dropoff_ontime_pct < 30
+    	THEN 'At Risk' ELSE NULL END  AS scorecard_risk_dropoff_ontime__c
 --	boolean qualifiers
 	, has_app_installed as Has_App_Installed__c
 	-- , has_bank_account_on_file as Has_Bank_Account_on_File__c
