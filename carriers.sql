@@ -258,8 +258,8 @@ select
 	, analytics.mart_carrier_scorecard.pickup_ontime_pct_rush /100 AS scorecard_pickup_ontime_rush__c
 	--new
 	, analytics.mart_carrier_scorecard.pickup_ontime_pct_scheduled /100 AS scorecard_pickup_ontime_scheduled__c
-    , analytics.mart_carrier_scorecard.pickup_ontime_pct AS /100 scorecard_pickup_ontime_percent__c
-    , analytics.mart_carrier_scorecard.dropoff_ontime_pct AS /100 scorecard_dropoff_ontime_percent__c
+    , analytics.mart_carrier_scorecard.pickup_ontime_pct /100 AS scorecard_pickup_ontime_percent__c
+    , analytics.mart_carrier_scorecard.dropoff_ontime_pct /100 AS scorecard_dropoff_ontime_percent__c
     , analytics.mart_carrier_scorecard.avg_customer_rating AS scorecard_average_customer_rating__c
 	--new
 	, analytics.mart_carrier_scorecard.pct_arrived_30min_early /100 AS scorecard_arrived_30min_early__c
