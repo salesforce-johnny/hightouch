@@ -250,54 +250,50 @@ select
 	, analytics.data_carriers.workers_compensation_coverage as Workers_Compensation_Coverage__c
 	, analytics.data_carriers.stripe_payouts_enabled as Stripe_Payouts_Enabled__c
     --scorecard
-    , COALESCE(carrier_completions.driver_count, 0) AS scorecard_driver_count__c
-    , COALESCE(carrier_completions.completed_deliveries, 0) AS scorecard_completed_deliveries__c
-    , COALESCE(carrier_completion_viols.completion_violation_count, 0)  AS scorecard_completion_violations__c
-    , ROUND(
-        COALESCE(carrier_completions.completed_deliveries, 0)
-        / NULLIF(COALESCE(carrier_completions.completed_deliveries, 0) + COALESCE(carrier_completion_viols.completion_violation_count, 0), 0)
-        , 4
-      ) AS scorecard_completion_rate__c
-    , COALESCE(carrier_completions.accurate_deliveries, 0) AS scorecard_accurate_deliveries__c
-    , ROUND(
-        COALESCE(carrier_completions.accurate_deliveries, 0)
-        / NULLIF(COALESCE(carrier_completions.completed_deliveries, 0), 0)
-        , 4
-      ) AS scorecard_delivery_accuracy__c
-    , CASE WHEN COALESCE(carrier_ratings.rated_deliveries, 0) > 0
-        THEN ROUND(carrier_ratings.avg_customer_rating, 2) END AS scorecard_avg_customer_rating__c
-    , COALESCE(carrier_ratings.rated_deliveries, 0) AS scorecard_rated_deliveries__c
-    , carrier_eta.eta_delivery_count AS scorecard_eta_delivery_count__c
-    , carrier_eta.pickup_ontime_pct AS scorecard_pickup_ontime_percent__c
-    , carrier_eta.dropoff_ontime_pct AS scorecard_dropoff_ontime_percent__c
-	-- PERCENTAGES ARE DIFFERENT
-	, CASE WHEN carrier_completions.completed_deliveries >= 10 AND scorecard_completion_rate__c < 0.80
-    	THEN 'At Risk' ELSE null END
-    	AS scorecard_risk_completion__c
-	, CASE WHEN carrier_completions.completed_deliveries >= 10 AND scorecard_delivery_accuracy__c < 0.95
-    	THEN 'At Risk' ELSE null END
-    	AS scorecard_risk_accuracy__c
-	, CASE WHEN carrier_completions.completed_deliveries >= 10 AND scorecard_pickup_ontime_percent__c < 0.30
-    	THEN 'At Risk' ELSE null END
-    	AS scorecard_risk_pickup_ontime__c
-	, CASE WHEN carrier_completions.completed_deliveries >= 10 AND scorecard_dropoff_ontime_percent__c < 0.30
-    	THEN 'At Risk' ELSE null END
-		AS scorecard_risk_dropoff_ontime__c
+    , analytics.mart_carrier_scorecard.driver_count AS scorecard_driver_count__c
+    , analytics.mart_carrier_scorecard.completed_deliveries AS scorecard_completed_deliveries__c
+    , analytics.mart_carrier_scorecard.completion_rate_pct /100 AS scorecard_completion_rate__c
+    , analytics.mart_carrier_scorecard.delivery_accuracy_pct /100 AS scorecard_delivery_accuracy__c
+	--new
+	, analytics.mart_carrier_scorecard.pickup_ontime_pct_rush /100 AS scorecard_pickup_ontime_rush__c
+	--new
+	, analytics.mart_carrier_scorecard.pickup_ontime_pct_scheduled /100 AS scorecard_pickup_ontime_scheduled__c
+    , analytics.mart_carrier_scorecard.pickup_ontime_pct AS /100 scorecard_pickup_ontime_percent__c
+    , analytics.mart_carrier_scorecard.dropoff_ontime_pct AS /100 scorecard_dropoff_ontime_percent__c
+    , analytics.mart_carrier_scorecard.avg_customer_rating AS scorecard_average_customer_rating__c
+	--new
+	, analytics.mart_carrier_scorecard.pct_arrived_30min_early /100 AS scorecard_arrived_30min_early__c
+    , analytics.mart_carrier_scorecard.completion_violation_count  AS scorecard_completion_violations__c
+	--new
+	, analytics.mart_carrier_scorecard.not_moving_unassign_count AS scorecard_not_moving_unassign_count__c
+	--new
+	, analytics.mart_carrier_scorecard.early_arrival_count AS scorecard_early_arrival_count__c
+	--new
+	, analytics.mart_carrier_scorecard.scheduled_with_origin_count AS scorecard_scheduled_with_origin_count__c
+	, analytics.mart_carrier_scorecard.eta_delivery_count AS scorecard_eta_delivery_count__c
+    , analytics.mart_carrier_scorecard.rated_deliveries AS scorecard_rated_deliveries__c
+	--new (rename scorecard risk completion)
+	, analytics.mart_carrier_scorecard.perf_completion AS scorecard_perf_completion__c
+	--new (rename)
+	, analytics.mart_carrier_scorecard.perf_accuracy AS scorecard_perf_accuracy__c
+	--new (rename)
+	, analytics.mart_carrier_scorecard.perf_pickup_ontime AS scorecard_perf_pickup_ontime__c
+	--new (rename)
+	, analytics.mart_carrier_scorecard.perf_dropoff_ontime AS scorecard_perf_dropoff_ontime__c
+	--new (rename)
+	, analytics.mart_carrier_scorecard.perf_rating AS scorecard_perf_rating__c
+	--new
+	, analytics.mart_carrier_scorecard.scorecard_window_days AS scorecard_window_days__c
+	--new
+	, analytics.mart_carrier_scorecard.scorecard_as_of_date AS scorecard_as_of_date__c
+    --remove this property COALESCE(analytics.mart_carrier_scorecard.accurate_deliveries, 0) AS scorecard_accurate_deliveries__c
 from analytics.data_carriers
 left join analytics.data_drivers	
 	on analytics.data_carriers.email_address = analytics.data_drivers.email_address
 	and analytics.data_carriers.external_id = analytics.data_drivers.carrier_external_id
 	and analytics.data_drivers.carrier_permissions = 'owner'
-left join all_carriers
-    on analytics.data_carriers.external_id = all_carriers.carrier_external_id
-left join carrier_completions
-    on analytics.data_carriers.external_id = carrier_completions.carrier_external_id
-left join carrier_ratings
-    on analytics.data_carriers.external_id = carrier_ratings.carrier_external_id
-left join carrier_completion_viols
-    on analytics.data_carriers.external_id = carrier_completion_viols.carrier_external_id
-left join carrier_eta
-    on analytics.data_carriers.external_id = carrier_eta.carrier_external_id
+left join analytics.mart_carrier_scorecard
+	on analytics.data_carriers.external_id = analytics.mart_carrier_scorecard.carrier_external_id
 where 1=1
   and name is not null
   and name <> ''
