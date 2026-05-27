@@ -57,96 +57,6 @@ with
 			, lateral flatten(input => t.driver_accessory_names) f
 		where f.value::string ilike '%(PPE)%'
 	)
-	, all_drivers AS (
-  		SELECT driver_external_id, MAX(driver_name) AS driver_name, MAX(carrier_external_id) AS carrier_external_id, MAX(carrier_name) AS carrier_name
-  		FROM CURRI.ANALYTICS.BT_DELIVERIES
-  		WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
-    		AND driver_external_id IS NOT NULL
-    		AND delivery_type NOT IN ('route', 'cms')
-  		GROUP BY driver_external_id
-
-  		UNION
-
-  		SELECT driver_external_id, MAX(driver_name) AS driver_name, MAX(carrier_external_id) AS carrier_external_id, MAX(carrier_name) AS carrier_name
-  		FROM CURRI.ANALYTICS.BT_VIOLATIONS
-  		WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
-    		AND driver_external_id IS NOT NULL
-    		AND delivery_type NOT IN ('route', 'cms')
-  		GROUP BY driver_external_id
-	)
-
-	, driver_completions AS (
-		SELECT
-			c.driver_external_id,
-			COUNT(*) AS completed_deliveries,
-			COUNT(CASE WHEN av.delivery_external_id IS NULL THEN 1 END) AS accurate_deliveries
-		FROM CURRI.ANALYTICS.BT_DELIVERIES c
-		LEFT JOIN (
-			SELECT DISTINCT delivery_external_id
-			FROM CURRI.ANALYTICS.BT_VIOLATIONS
-			WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
-				AND delivery_type NOT IN ('route', 'cms')
-				AND violation_type_code IN (
-					'did_not_follow_delivery_instructions',
-					'wrong_vehicle',
-					'confirmed_wrong_vehicle',
-					'wrong_accessories',
-					'did_not_deliver_all_items'
-				)
-		) av ON c.delivery_external_id = av.delivery_external_id
-		WHERE c.created_at >= DATEADD(day, -30, CURRENT_DATE)
-			AND c.is_completed_delivery = true
-			AND c.driver_external_id IS NOT NULL
-			AND c.delivery_type NOT IN ('route', 'cms')
-		GROUP BY c.driver_external_id
-	)
-
-	, driver_ratings AS (
-		SELECT
-			driver_external_id,
-			AVG(customer_rating) AS avg_customer_rating,
-			COUNT(CASE WHEN customer_rating IS NOT NULL THEN 1 END) AS rated_deliveries
-		FROM CURRI.ANALYTICS.BT_DELIVERIES
-		WHERE is_completed_delivery = true
-			AND driver_external_id IS NOT NULL
-			AND delivery_type NOT IN ('route', 'cms')
-		GROUP BY driver_external_id
-	)
-
-	, driver_completion_viols AS (
-		SELECT driver_external_id, COUNT(*) AS completion_violation_count
-		FROM CURRI.ANALYTICS.BT_VIOLATIONS
-		WHERE created_at >= DATEADD(day, -30, CURRENT_DATE)
-			AND violation_type_code IN (
-				'self_unassignment',
-				'scheduled_delivery_failure',
-				'did_not_complete_multistop_delivery'
-			)
-			AND driver_external_id IS NOT NULL
-			AND delivery_type NOT IN ('route', 'cms')
-		GROUP BY driver_external_id
-	)
-
-	, driver_eta AS (
-		SELECT
-			d.driver_external_id,
-			COUNT(*) AS eta_delivery_count,
-			ROUND(
-			COUNT(CASE WHEN e.seconds_to_origin_delta / 60.0 BETWEEN -30 AND 27 THEN 1 END)
-			/ NULLIF(COUNT(*), 0), 4
-			) AS pickup_ontime_pct,
-			ROUND(
-			COUNT(CASE WHEN e.seconds_to_destination_delta / 60.0 BETWEEN -30 AND 12 THEN 1 END)
-			/ NULLIF(COUNT(*), 0), 4
-			) AS dropoff_ontime_pct
-		FROM CURRI.ANALYTICS.DELIVERY_DRIVER_ETAS_VS_ATAS e
-		JOIN CURRI.ANALYTICS.BT_DELIVERIES d ON e.delivery_id = d.delivery_id
-		WHERE d.created_at >= DATEADD(day, -30, CURRENT_DATE)
-			AND d.is_completed_delivery = true
-			AND d.driver_external_id IS NOT NULL
-			AND d.delivery_type NOT IN ('route', 'cms')
-		GROUP BY d.driver_external_id
-	)
 select distinct
 -- driver basics & ids
     analytics.data_drivers.driver_external_id as pk
@@ -340,53 +250,29 @@ select distinct
 	, vehicle_model as Vehicle_Model__c
 	, vehicle_trim as Vehicle_Trim__c
 -- driver scorecard per driver 20260420
-	, COALESCE(driver_completions.completed_deliveries, 0) AS scorecard_completed_deliveries__c
-	, COALESCE(driver_completion_viols.completion_violation_count, 0) AS scorecard_completion_violations__c
-	, ROUND(
-		COALESCE(driver_completions.completed_deliveries, 0)
-		/ NULLIF(COALESCE(driver_completions.completed_deliveries, 0) + COALESCE(driver_completion_viols.completion_violation_count, 0), 0)
-		, 4
-	) AS scorecard_completion_rate__c
-	, COALESCE(driver_completions.accurate_deliveries, 0) AS scorecard_accurate_deliveries__c
-	, ROUND(
-		COALESCE(driver_completions.accurate_deliveries, 0)
-		/ NULLIF(COALESCE(driver_completions.completed_deliveries, 0), 0)
-		, 4
-	) AS scorecard_delivery_accuracy__c
-	, CASE WHEN COALESCE(driver_ratings.rated_deliveries, 0) > 0 THEN ROUND(driver_ratings.avg_customer_rating, 2) END AS scorecard_average_customer_rating__c
-	, COALESCE(driver_ratings.rated_deliveries, 0) AS scorecard_rated_deliveries__c
-	, driver_eta.eta_delivery_count AS scorecard_eta_delivery_count__c
-	, driver_eta.pickup_ontime_pct AS scorecard_pickup_ontime_percent__c
-	, driver_eta.dropoff_ontime_pct AS scorecard_dropoff_ontime_percent__c
-	, CASE WHEN ROUND(
-    	driver_completions.completed_deliveries
-    	/ NULLIF(driver_completions.completed_deliveries + COALESCE(driver_completion_viols.completion_violation_count, 0), 0)
-    	, 4) < 0.80  THEN 'At Risk' ELSE NULL END  AS scorecard_risk_completion__c
-	, CASE WHEN ROUND(
-    	driver_completions.accurate_deliveries / NULLIF(driver_completions.completed_deliveries, 0) , 4) < 0.95  THEN 'At Risk' ELSE NULL END 
-		AS scorecard_risk_accuracy__c
-	, CASE WHEN driver_eta.pickup_ontime_pct  < 0.30
-    	THEN 'At Risk' ELSE NULL END  AS scorecard_risk_pickup_ontime__c
-	, CASE WHEN driver_eta.dropoff_ontime_pct < 0.30
-    	THEN 'At Risk' ELSE NULL END  AS scorecard_risk_dropoff_ontime__c
---	boolean qualifiers
-	, has_app_installed as Has_App_Installed__c
-	-- , has_bank_account_on_file as Has_Bank_Account_on_File__c
-	-- , has_card_on_file as Has_Card_on_File__c
-	, has_profile_photo as Has_Profile_Photo__c
-	, went_through_carrier_flow as Went_Through_Carrier_Flow__c
-	, 'Driver' as contact_record_type
-	, splits.Driver_Accessories__c
-	, splits.Driver_Capabilities__c
-	, splits.Active_Violation_Types__c
-	, splits.Lifetime_Violation_types__c
-	, splits.Vehicle_Accessories__c
-	, splits.Preferred_Delivery_Methods__c
-	, splits.Upscale_Delivery_Methods__c
-	, case
-		when array_contains('ppe-certified'::variant, analytics.data_drivers.driver_tags) then 'Certified'
-		when (not array_contains('ppe-certified'::variant, analytics.data_drivers.driver_tags) or analytics.data_drivers.driver_tags is null) and analytics.data_drivers.driver_external_id in (select driver_external_id from accessories) then 'Unverified'
-		else 'None' end as PPE_certification
+	, analytics.mart_driver_scorecard.completed_deliveries as scorecard_completed_deliveries__c
+	, analytics.mart_driver_scorecard.completion_rate_pct /100 as scorecard_completion_rate__c
+	, analytics.mart_driver_scorecard.delivery_accuracy_pct /100 as scorecard_delivery_accuracy__c
+	, analytics.mart_driver_scorecard.pickup_ontime_pct_rush /100 as scorecard_pickup_ontime_rush__c
+	, analytics.mart_driver_scorecard.pickup_ontime_pct_scheduled /100 as scorecard_pickup_ontime_scheduled__c
+	, analytics.mart_driver_scorecard.pickup_ontime_pct /100 as scorecard_pickup_ontime_percent__c
+	, analytics.mart_driver_scorecard.dropoff_ontime_pct /100 as scorecard_dropoff_ontime_percent__c
+	, analytics.mart_driver_scorecard.avg_customer_rating as scorecard_average_customer_rating__c
+	, analytics.mart_driver_scorecard.pct_arrived_30min_early /100 as scorecard_arrived_30min_early__c
+	, analytics.mart_driver_scorecard.completion_violation_count as scorecard_completion_violations__c
+	, analytics.mart_driver_scorecard.not_moving_unassign_count as scorecard_not_moving_unassignment_count__c
+	, analytics.mart_driver_scorecard.early_arrival_count as scorecard_early_arrival_count__c
+	, analytics.mart_driver_scorecard.scheduled_with_origin_count as scorecard_scheduled_with_origin_count__c
+	, analytics.mart_driver_scorecard.eta_delivery_count as scorecard_eta_delivery_count__c
+	, analytics.mart_driver_scorecard.rated_deliveries as scorecard_rated_deliveries__c
+	, analytics.mart_driver_scorecard.perf_completion as scorecard_perf_completion__c
+	, analytics.mart_driver_scorecard.perf_accuracy as scorecard_perf_accuracy__c
+	, analytics.mart_driver_scorecard.perf_pickup_ontime as scorecard_perf_pickup_ontime__c
+	, analytics.mart_driver_scorecard.perf_dropoff_ontime as scorecard_perf_dropoff_ontime__c
+	, analytics.mart_driver_scorecard.perf_rating as scorecard_perf_rating__c
+	, analytics.mart_driver_scorecard.scorecard_window_days as scorecard_window_days__c
+	, analytics.mart_driver_scorecard.scorecard_as_of_date as scorecard_as_of_date__c
+
 from analytics.data_drivers
 left join active_route_drivers
 	on analytics.data_drivers.driver_external_id = active_route_drivers.driver_external_id
@@ -394,16 +280,8 @@ left join all_route_drivers
 	on analytics.data_drivers.driver_external_id = all_route_drivers.driver_external_id
 left join splits
 	on analytics.data_drivers.driver_external_id = splits.driver_external_id
-left join all_drivers
-	on analytics.data_drivers.driver_external_id = all_drivers.driver_external_id
-left join driver_completions
-	on analytics.data_drivers.driver_external_id = driver_completions.driver_external_id
-left join driver_ratings
-	on analytics.data_drivers.driver_external_id = driver_ratings.driver_external_id
-left join driver_completion_viols
-	on analytics.data_drivers.driver_external_id = driver_completion_viols.driver_external_id
-left join driver_eta
-	on analytics.data_drivers.driver_external_id = driver_eta.driver_external_id
+left join analytics.mart_driver_scorecard
+	on analytics.data_drivers.driver_external_id = analytics.mart_driver_scorecard.driver_external_id
 where 1=1
 	and first_name is not null
 	and last_name is not null
