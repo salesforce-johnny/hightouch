@@ -158,37 +158,24 @@ select
     , analytics.mart_carrier_scorecard.completed_deliveries AS scorecard_completed_deliveries__c
     , analytics.mart_carrier_scorecard.completion_rate_pct /100 AS scorecard_completion_rate__c
     , analytics.mart_carrier_scorecard.delivery_accuracy_pct /100 AS scorecard_delivery_accuracy__c
-	--new
 	, analytics.mart_carrier_scorecard.pickup_ontime_pct_rush /100 AS scorecard_pickup_ontime_rush__c
-	--new
 	, analytics.mart_carrier_scorecard.pickup_ontime_pct_scheduled /100 AS scorecard_pickup_ontime_scheduled__c
     , analytics.mart_carrier_scorecard.pickup_ontime_pct /100 AS scorecard_pickup_ontime_percent__c
     , analytics.mart_carrier_scorecard.dropoff_ontime_pct /100 AS scorecard_dropoff_ontime_percent__c
     , analytics.mart_carrier_scorecard.avg_customer_rating AS scorecard_average_customer_rating__c
-	--new
 	, analytics.mart_carrier_scorecard.pct_arrived_30min_early /100 AS scorecard_arrived_30min_early__c
     , analytics.mart_carrier_scorecard.completion_violation_count  AS scorecard_completion_violations__c
-	--new
 	, analytics.mart_carrier_scorecard.not_moving_unassign_count AS scorecard_not_moving_unassign_count__c
-	--new
 	, analytics.mart_carrier_scorecard.early_arrival_count AS scorecard_early_arrival_count__c
-	--new
 	, analytics.mart_carrier_scorecard.scheduled_with_origin_count AS scorecard_scheduled_with_origin_count__c
 	, analytics.mart_carrier_scorecard.eta_delivery_count AS scorecard_eta_delivery_count__c
     , analytics.mart_carrier_scorecard.rated_deliveries AS scorecard_rated_deliveries__c
-	--new (rename scorecard risk completion)
 	, analytics.mart_carrier_scorecard.perf_completion AS scorecard_perf_completion__c
-	--new (rename)
 	, analytics.mart_carrier_scorecard.perf_accuracy AS scorecard_perf_accuracy__c
-	--new (rename)
 	, analytics.mart_carrier_scorecard.perf_pickup_ontime AS scorecard_perf_pickup_ontime__c
-	--new (rename)
 	, analytics.mart_carrier_scorecard.perf_dropoff_ontime AS scorecard_perf_dropoff_ontime__c
-	--new (rename)
 	, analytics.mart_carrier_scorecard.perf_rating AS scorecard_perf_rating__c
-	--new
 	, analytics.mart_carrier_scorecard.scorecard_window_days AS scorecard_window_days__c
-	--new
 	, analytics.mart_carrier_scorecard.scorecard_as_of_date AS scorecard_as_of_date__c
 from analytics.data_carriers
 left join analytics.data_drivers	
