@@ -251,8 +251,8 @@ select distinct
 	, vehicle_trim as Vehicle_Trim__c
 -- boolean qualifiers
 	, has_app_installed as Has_App_Installed__c
-	, has_bank_account_on_file as Has_Bank_Account_on_File__c
-	, has_card_on_file as Has_Card_on_File__c
+	--, has_bank_account_on_file as Has_Bank_Account_on_File__c
+	--, has_card_on_file as Has_Card_on_File__c
 	, has_profile_photo as Has_Profile_Photo__c
 	, went_through_carrier_flow as Went_Through_Carrier_Flow__c
 	, 'Driver' as contact_record_type
