@@ -256,6 +256,17 @@ select distinct
 	, has_profile_photo as Has_Profile_Photo__c
 	, went_through_carrier_flow as Went_Through_Carrier_Flow__c
 	, 'Driver' as contact_record_type
+	, splits.Driver_Accessories__c
+	, splits.Driver_Capabilities__c
+	, splits.Active_Violation_Types__c
+	, splits.Lifetime_Violation_types__c
+	, splits.Vehicle_Accessories__c
+	, splits.Preferred_Delivery_Methods__c
+	, splits.Upscale_Delivery_Methods__c
+	, case
+		when array_contains('ppe-certified'::variant, analytics.data_drivers.driver_tags) then 'Certified'
+		when (not array_contains('ppe-certified'::variant, analytics.data_drivers.driver_tags) or analytics.data_drivers.driver_tags is null) and analytics.data_drivers.driver_external_id in (select driver_external_id from accessories) then 'Unverified'
+		else 'None' end as PPE_certification
 -- driver scorecard per driver 20260420
 	, analytics.mart_driver_scorecard.completed_deliveries as scorecard_completed_deliveries__c
 	, analytics.mart_driver_scorecard.completion_rate_pct /100 as scorecard_completion_rate__c
