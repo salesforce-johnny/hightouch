@@ -150,6 +150,8 @@ select distinct
 		else 'Team Account' end as account_record_type
 	, losing_account_external_ids as Losing_Account_External_Ids__c 
 	, domains.domain_list
+-- route planner
+	, to_varchar(convert_timezone('UTC', analytics.MART_ROUTE_PLANNER_TRIALS.TRIAL_STARTED_AT), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Route_Planner_Trial_Started_At__c
 from analytics.data_accounts
 left join accounts acct
 	on analytics.data_accounts.account_id = acct.id
@@ -161,6 +163,8 @@ left join analytics.serviceability_v4
 	on analytics.data_accounts.location_zip_code = analytics.serviceability_v4.zip_code
 left join analytics.int_account_churn_risk
     on analytics.data_accounts.account_external_id = analytics.int_account_churn_risk.account_external_id
+left join analytics.mart_route_planner_trials
+	on analytics.data_accounts.account_external_id = analytics.mart_route_planner_trials.account_external_id
 left join domains
 	on domains.id = analytics.data_accounts.account_id
 where 1=1
