@@ -259,6 +259,9 @@ select
 	, coalesce(analytics.serviceability_v4.overall_grade, sfdc_contacts.Serviceability_Grade__c) as Serviceability_Grade__c
 	, coalesce(analytics.serviceability_v4.tractor_grade, sfdc_contacts.Tractor_Trailers_Grade__c) as Tractor_Trailers_Grade__c
 	, coalesce(analytics.serviceability_v4.truck_grade, sfdc_contacts.Trucks_Grade__c) as Trucks_Grade__c
+--	route planner
+	, to_varchar(convert_timezone('UTC', analytics.MART_ROUTE_PLANNER_TRIALS.TRIAL_STARTED_AT), 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"') as Route_Planner_Trial_Started_At__c
+--
 	, true as Is_Customer__c
 	, case when user_tags.tag_id = '20376' then 1 else 0 end as vip__c
 	, case when analytics.data_signups.order_count = 0 then 1 else 0 end as baby_booker__c
@@ -277,6 +280,8 @@ left join user_tags
 	and tag_id = '20376'
 left join sfdc_contacts
 	on analytics.data_signups.email_address = sfdc_contacts.email
+left join analytics.MART_ROUTE_PLANNER_TRIALS
+	on analytics.data_signups.email_address = analytics.MART_ROUTE_PLANNER_TRIALS.CREATED_BY_EMAIL
 where 1=1
 	and analytics.data_signups.email_address not like '%@ferguson.com_%'
 	and analytics.data_signups.email_address not in ('info@otmfreight', 'info@wdwarrenllc', 'faizanahmedhere218@gmail%2ecom', 'virgilray32@promysselogistics', 'elohim@transportatiollc1')
