@@ -1,9 +1,18 @@
+with ranked_scorecard as (
+    select
+        mcs.*,
+        row_number() over (
+            partition by mcs.carrier_external_id
+            order by mcs.scorecard_as_of_date desc
+        ) as rn
+    from analytics.mart_carrier_scorecard mcs
+)
+
 select 
 --	account basics
 	analytics.data_carriers.external_id as pk
     , analytics.data_carriers.name as Name
 	, analytics.data_carriers.external_id as Carrier_External_ID__c
-	, analytics.data_drivers.driver_external_id as Driver_External_ID__c
 	, analytics.data_carriers.email_address::string as email_address
 	, analytics.data_carriers.denial_context as Denial_Context__c	
 	, case 
@@ -154,36 +163,33 @@ select
 	, analytics.data_carriers.workers_compensation_coverage as Workers_Compensation_Coverage__c
 	, analytics.data_carriers.stripe_payouts_enabled as Stripe_Payouts_Enabled__c
     --scorecard
-    , analytics.mart_carrier_scorecard.driver_count AS scorecard_driver_count__c
-    , analytics.mart_carrier_scorecard.completed_deliveries AS scorecard_completed_deliveries__c
-    , analytics.mart_carrier_scorecard.completion_rate_pct /100 AS scorecard_completion_rate__c
-    , analytics.mart_carrier_scorecard.delivery_accuracy_pct /100 AS scorecard_delivery_accuracy__c
-	, analytics.mart_carrier_scorecard.pickup_ontime_pct_rush /100 AS scorecard_pickup_ontime_rush__c
-	, analytics.mart_carrier_scorecard.pickup_ontime_pct_scheduled /100 AS scorecard_pickup_ontime_scheduled__c
-    , analytics.mart_carrier_scorecard.pickup_ontime_pct /100 AS scorecard_pickup_ontime_percent__c
-    , analytics.mart_carrier_scorecard.dropoff_ontime_pct /100 AS scorecard_dropoff_ontime_percent__c
-    , analytics.mart_carrier_scorecard.avg_customer_rating AS scorecard_average_customer_rating__c
-	, analytics.mart_carrier_scorecard.pct_arrived_30min_early /100 AS scorecard_arrived_30min_early__c
-    , analytics.mart_carrier_scorecard.completion_violation_count  AS scorecard_completion_violations__c
-	, analytics.mart_carrier_scorecard.not_moving_unassign_count AS scorecard_not_moving_unassign_count__c
-	, analytics.mart_carrier_scorecard.early_arrival_count AS scorecard_early_arrival_count__c
-	, analytics.mart_carrier_scorecard.scheduled_with_origin_count AS scorecard_scheduled_with_origin_count__c
-	, analytics.mart_carrier_scorecard.eta_delivery_count AS scorecard_eta_delivery_count__c
-    , analytics.mart_carrier_scorecard.rated_deliveries AS scorecard_rated_deliveries__c
-	, analytics.mart_carrier_scorecard.perf_completion AS scorecard_perf_completion__c
-	, analytics.mart_carrier_scorecard.perf_accuracy AS scorecard_perf_accuracy__c
-	, analytics.mart_carrier_scorecard.perf_pickup_ontime AS scorecard_perf_pickup_ontime__c
-	, analytics.mart_carrier_scorecard.perf_dropoff_ontime AS scorecard_perf_dropoff_ontime__c
-	, analytics.mart_carrier_scorecard.perf_rating AS scorecard_perf_rating__c
-	, analytics.mart_carrier_scorecard.scorecard_window_days AS scorecard_window_days__c
-	, analytics.mart_carrier_scorecard.scorecard_as_of_date AS scorecard_as_of_date__c
+    , ranked_scorecard.driver_count AS scorecard_driver_count__c
+    , ranked_scorecard.completed_deliveries AS scorecard_completed_deliveries__c
+    , ranked_scorecard.completion_rate_pct /100 AS scorecard_completion_rate__c
+    , ranked_scorecard.delivery_accuracy_pct /100 AS scorecard_delivery_accuracy__c
+	, ranked_scorecard.pickup_ontime_pct_rush /100 AS scorecard_pickup_ontime_rush__c
+	, ranked_scorecard.pickup_ontime_pct_scheduled /100 AS scorecard_pickup_ontime_scheduled__c
+    , ranked_scorecard.pickup_ontime_pct /100 AS scorecard_pickup_ontime_percent__c
+    , ranked_scorecard.dropoff_ontime_pct /100 AS scorecard_dropoff_ontime_percent__c
+    , ranked_scorecard.avg_customer_rating AS scorecard_average_customer_rating__c
+	, ranked_scorecard.pct_arrived_30min_early /100 AS scorecard_arrived_30min_early__c
+    , ranked_scorecard.completion_violation_count  AS scorecard_completion_violations__c
+	, ranked_scorecard.not_moving_unassign_count AS scorecard_not_moving_unassign_count__c
+	, ranked_scorecard.early_arrival_count AS scorecard_early_arrival_count__c
+	, ranked_scorecard.scheduled_with_origin_count AS scorecard_scheduled_with_origin_count__c
+	, ranked_scorecard.eta_delivery_count AS scorecard_eta_delivery_count__c
+    , ranked_scorecard.rated_deliveries AS scorecard_rated_deliveries__c
+	, ranked_scorecard.perf_completion AS scorecard_perf_completion__c
+	, ranked_scorecard.perf_accuracy AS scorecard_perf_accuracy__c
+	, ranked_scorecard.perf_pickup_ontime AS scorecard_perf_pickup_ontime__c
+	, ranked_scorecard.perf_dropoff_ontime AS scorecard_perf_dropoff_ontime__c
+	, ranked_scorecard.perf_rating AS scorecard_perf_rating__c
+	, ranked_scorecard.scorecard_window_days AS scorecard_window_days__c
+	, ranked_scorecard.scorecard_as_of_date AS scorecard_as_of_date__c
 from analytics.data_carriers
-left join analytics.data_drivers	
-	on analytics.data_carriers.email_address = analytics.data_drivers.email_address
-	and analytics.data_carriers.external_id = analytics.data_drivers.carrier_external_id
-	and analytics.data_drivers.carrier_permissions = 'owner'
-left join analytics.mart_carrier_scorecard
-	on analytics.data_carriers.external_id = analytics.mart_carrier_scorecard.carrier_external_id
+left join ranked_scorecard
+	on analytics.data_carriers.external_id = ranked_scorecard.carrier_external_id
+	and ranked_scorecard.rn = 1
 where 1=1
   and name is not null
   and name <> ''
